@@ -143,7 +143,7 @@ async def start_handler(client, message):
     )
     await message.reply(text)
 
-@app.on_message(filters.regex(r"(tiktok\.com|youtu\.be|youtube\.com|instagram\.com)"))
+@app.on_message(filters.regex(r"(tiktok\.com|instagram\.com|youtube\.com/shorts/)"))
 async def link_handler(client, message: Message):
     uid = message.from_user.id
     settings = get_settings(uid)
