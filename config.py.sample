@@ -1,0 +1,7 @@
+# 1. Rename this file to config.py
+# 2. Get API_ID and API_HASH from my.telegram.org and BOT_TOKEN from @BotFather
+# and then fill it here...
+
+API_ID = your_api_id 
+API_HASH = "your_api_hash"
+BOT_TOKEN = "your_bot_token"
