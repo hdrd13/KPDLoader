@@ -143,7 +143,7 @@ async def start_handler(client, message):
     )
     await message.reply(text)
 
-@app.on_message(filters.regex(r"(tiktok\.com|instagram\.com|youtube\.com/shorts/)"))
+@app.on_message(filters.regex(r"(tiktok\.com|instagram\.com|youtube\.com/shorts/|music\.youtube\.com)"))
 async def link_handler(client, message: Message):
     uid = message.from_user.id
     settings = get_settings(uid)
@@ -162,7 +162,7 @@ async def link_handler(client, message: Message):
         
         caption = ""
         buttons = None
-        
+        duration = 0
         meta_title = "Original Audio"
         meta_artist = "Bot"
 
@@ -184,6 +184,7 @@ async def link_handler(client, message: Message):
             caption += f"\n\n<a href='{real_url}'>Source Link</a>"
 
         is_photo = "/photo/" in real_url or "instagram.com/p/" in real_url
+        is_yt_music = "music.youtube.com" in real_url
 
         if is_photo:
             tasks = [asyncio.to_thread(download_gallery, real_url, save_dir)]
@@ -243,6 +244,35 @@ async def link_handler(client, message: Message):
                  await message.reply("🔗", reply_markup=buttons)
 
             await status.delete()
+
+        elif is_yt_music:
+            await status.edit_text("🎧 Downloading music...")
+            
+            success = await asyncio.to_thread(download_audio_force, real_url, save_dir)
+            
+            if success:
+                await status.edit_text("🔄️ Uploading...")
+                audio_file = None
+                for root, _, files in os.walk(save_dir):
+                    for f in files:
+                        if f.lower().endswith(('.mp3', '.m4a')):
+                            audio_file = os.path.join(root, f)
+                            break
+                
+                if audio_file:
+                    await client.send_audio(
+                        message.chat.id, 
+                        audio_file, 
+                        title=meta_title, 
+                        performer=meta_artist, 
+                        duration=duration,
+                        reply_markup=buttons,
+                        reply_to_message_id=message.id
+                    )
+                
+                await status.delete()
+            else:
+                await status.edit_text("❌ Audio download error.")
 
         else:
             tasks = [asyncio.to_thread(download_video, real_url, save_dir)]
