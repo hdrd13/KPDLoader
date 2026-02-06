@@ -6,6 +6,7 @@ import subprocess
 import requests
 import html
 import sys
+import re
 from pyrogram import Client, filters, idle
 from pyrogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton, 
@@ -148,7 +149,13 @@ async def link_handler(client, message: Message):
     uid = message.from_user.id
     settings = get_settings(uid)
     
-    raw_url = message.text.split()[0]
+    url_pattern = r"(https?://(?:www\.)?[\w.-]*(?:tiktok\.com|instagram\.com|youtube\.com/shorts/|music\.youtube\.com).*[/\?][^\s]+)"
+    match = re.search(url_pattern, message.text)
+    
+    if not match:
+        return
+        
+    raw_url = match.group(0)
     
     status = await message.reply("⏳ Downloading...")
     
