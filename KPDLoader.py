@@ -71,6 +71,7 @@ def init_db():
                 url TEXT PRIMARY KEY,
                 video_id TEXT,
                 audio_id TEXT,
+                caption TEXT,  
                 timestamp REAL
             )
         """)
@@ -78,19 +79,19 @@ def init_db():
 def get_cache(url):
     with sqlite3.connect(DB_NAME) as con:
         con.execute("DELETE FROM cache WHERE timestamp < ?", (time.time() - 259200,))
-        
-        cur = con.execute("SELECT video_id, audio_id FROM cache WHERE url = ?", (url,))
+        cur = con.execute("SELECT video_id, audio_id, caption FROM cache WHERE url = ?", (url,))
         row = cur.fetchone()
-        return {'video': row[0], 'audio': row[1]} if row else None
+        return {'video': row[0], 'audio': row[1], 'caption': row[2]} if row else None
 
-def update_cache(url, video_id=None, audio_id=None):
+def update_cache(url, video_id=None, audio_id=None, caption=None):
     with sqlite3.connect(DB_NAME) as con:
         con.execute("INSERT OR IGNORE INTO cache (url, timestamp) VALUES (?, ?)", (url, time.time()))
         if video_id:
             con.execute("UPDATE cache SET video_id = ?, timestamp = ? WHERE url = ?", (video_id, time.time(), url))
         if audio_id:
             con.execute("UPDATE cache SET audio_id = ?, timestamp = ? WHERE url = ?", (audio_id, time.time(), url))
-
+        if caption:
+            con.execute("UPDATE cache SET caption = ?, timestamp = ? WHERE url = ?", (caption, time.time(), url))
 init_db()
 
 def get_settings(user_id):
@@ -228,13 +229,59 @@ async def link_handler(client, message: Message):
 
     try:
         real_url = await asyncio.to_thread(get_real_url, raw_url)
-        info = await asyncio.to_thread(get_meta_info, real_url)
 
+        is_simple_video = not ("/photo/" in real_url or "instagram.com/p/" in real_url or "music.youtube.com" in real_url)
+        
+        default_buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 OG Link", url=real_url)]]) if settings['link_btn'] else None
+
+        if is_simple_video:
+            cached_data = await asyncio.to_thread(get_cache, real_url)
+            
+            if cached_data and cached_data['video']:
+                cached_caption = cached_data['caption'] if cached_data['caption'] else ""
+                
+                vid_cap = cached_caption if not settings['sep_desc'] else ""
+                vid_btn = default_buttons if not settings['sep_desc'] else None
+
+                try:
+                    await client.send_video(
+                        message.chat.id, 
+                        video=cached_data['video'], 
+                        caption=vid_cap, 
+                        reply_markup=vid_btn,
+                        reply_to_message_id=message.id
+                    )
+                    
+                    if settings['desc'] and settings['sep_desc'] and cached_caption:
+                        await message.reply(cached_caption, reply_markup=default_buttons)
+
+                    if settings['audio']:
+                        if cached_data['audio']:
+                            await client.send_audio(message.chat.id, cached_data['audio'], reply_to_message_id=message.id)
+                        else:
+                            if not os.path.exists(save_dir): os.makedirs(save_dir)
+                            await asyncio.to_thread(download_audio_force, real_url, save_dir)
+                            
+                            audio_path = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
+                            
+                            if audio_path:
+                                sent_audio = await client.send_audio(message.chat.id, audio_path, reply_to_message_id=message.id)
+                                if sent_audio.audio:
+                                    await asyncio.to_thread(update_cache, real_url, audio_id=sent_audio.audio.file_id)
+                    
+                    await status.delete()
+                    if os.path.exists(save_dir): shutil.rmtree(save_dir)
+                    return
+                except Exception as e:
+                    logging.warning(f"Cache expired: {e}")
+
+        info = await asyncio.to_thread(get_meta_info, real_url)
+        
         caption = ""
-        buttons = None
-        duration = 0
+        buttons = default_buttons
         meta_title = "Original Audio"
         meta_artist = "Bot"
+        duration = 0
 
         if info:
             author = html.escape(info.get('uploader', 'User'))
@@ -243,70 +290,11 @@ async def link_handler(client, message: Message):
             
             if settings['desc']:
                 caption = f"<b>{author}</b>\n\n{desc}"
+                if settings['desc'] and not settings['link_btn']:
+                     caption += f"\n\n<a href='{real_url}'>Source Link</a>"
 
             meta_title = info.get('track') or info.get('title') or "Audio"
             meta_artist = info.get('artist') or info.get('uploader') or "Bot"
-            if len(meta_title) > 100: meta_title = meta_title[:100]
-
-        if settings['link_btn']:
-            buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 OG Link", url=real_url)]])
-        elif settings['desc']:
-            caption += f"\n\n<a href='{real_url}'>Source Link</a>"
-
-        is_simple_video = not ("/photo/" in real_url or "instagram.com/p/" in real_url or "music.youtube.com" in real_url)
-        
-        if is_simple_video:
-            cached_data = await asyncio.to_thread(get_cache, real_url)
-            
-            if cached_data and cached_data['video']:
-                
-                vid_cap = caption if not settings['sep_desc'] else ""
-                vid_btn = buttons if not settings['sep_desc'] else None
-                
-                try:
-                    await client.send_video(
-                        message.chat.id, 
-                        video=cached_data['video'], 
-                        caption=vid_cap, 
-                        reply_markup=vid_btn, 
-                        reply_to_message_id=message.id
-                    )
-                    
-                    if settings['desc'] and settings['sep_desc'] and caption:
-                        await message.reply(caption, reply_markup=buttons)
-
-                    if settings['audio']:
-                        if cached_data['audio']:
-                            await client.send_audio(
-                                message.chat.id, 
-                                cached_data['audio'],
-                                title=meta_title, 
-                                performer=meta_artist, 
-                                reply_to_message_id=message.id
-                            )
-                        
-                        else:
-                            if not os.path.exists(save_dir): os.makedirs(save_dir)
-                            
-                            await asyncio.to_thread(download_audio_force, real_url, save_dir)
-                            
-                            audio_path = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
-                            
-                            if audio_path:
-                                sent_audio = await client.send_audio(
-                                     message.chat.id, audio_path, 
-                                     title=meta_title, performer=meta_artist, 
-                                     reply_to_message_id=message.id
-                                )
-                                if sent_audio.audio:
-                                    await asyncio.to_thread(update_cache, real_url, audio_id=sent_audio.audio.file_id)
-
-                    await status.delete()
-                    if os.path.exists(save_dir): shutil.rmtree(save_dir)
-                    return
-                    
-                except Exception as e:
-                    logging.warning(f"Cache error: {e}")
 
         is_photo = "/photo/" in real_url or "instagram.com/p/" in real_url
         is_yt_music = "music.youtube.com" in real_url
@@ -421,7 +409,7 @@ async def link_handler(client, message: Message):
                     reply_to_message_id=message.id
                 )
                 if sent_msg.video:
-                    await asyncio.to_thread(update_cache, real_url, video_id=sent_msg.video.file_id)
+                    await asyncio.to_thread(update_cache, real_url, video_id=sent_msg.video.file_id, caption=caption)
                 
                 if settings['audio']:
                     audio_file = None
