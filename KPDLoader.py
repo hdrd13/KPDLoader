@@ -9,6 +9,7 @@ import sys
 import re
 import sqlite3
 import time
+import json
 from pyrogram import Client, filters, idle
 from pyrogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton, 
@@ -28,6 +29,7 @@ API_HASH = config.API_HASH
 BOT_TOKEN = config.BOT_TOKEN
 DB_NAME = "cache.db"
 DOWNLOAD_PATH = "downloads"
+SETTINGS_FILE = "user_settings.json"
 
 DEFAULT_SETTINGS = {
     "audio": True,
@@ -36,7 +38,24 @@ DEFAULT_SETTINGS = {
     "link_btn": True 
 }
 
-user_settings = {}
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {int(k): v for k, v in data.items()}
+        except Exception as e:
+            logging.error(f"Error loading settings: {e}")
+    return {}
+
+def save_settings_to_file():
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(user_settings, f, indent=4)
+    except Exception as e:
+        logging.error(f"Error saving settings: {e}")
+
+user_settings = load_settings()
 
 logging.basicConfig(level=logging.INFO)
 
@@ -143,6 +162,7 @@ def get_settings_kb(user_id):
         kb.append([InlineKeyboardButton(f"📄 Desc. separately: {'✅' if s['sep_desc'] else '❌'}", callback_data="set_sep")])
     
     kb.append([InlineKeyboardButton(f"🔗 Add OG link: {'✅' if s['link_btn'] else '❌'}", callback_data="set_link")])
+    kb.append([InlineKeyboardButton("🗑️ Delete", callback_data="set_close")])
     return InlineKeyboardMarkup(kb)
 
 @app.on_message(filters.command("settings"))
@@ -155,10 +175,18 @@ async def callback_handler(client, callback):
     action = callback.data.split("_")[1]
     s = get_settings(uid)
     
+    if action == "close":
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
     if action == "audio": s['audio'] = not s['audio']
     elif action == "desc": s['desc'] = not s['desc']
     elif action == "sep": s['sep_desc'] = not s['sep_desc']
     elif action == "link": s['link_btn'] = not s['link_btn']
+
+    save_settings_to_file()
     
     await callback.message.edit_reply_markup(get_settings_kb(uid))
 
