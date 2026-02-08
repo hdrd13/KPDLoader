@@ -3,7 +3,7 @@ import asyncio
 import logging
 import shutil
 import subprocess
-import requests
+import urllib.request
 import html
 import sys
 import re
@@ -100,8 +100,12 @@ def get_settings(user_id):
 
 def get_real_url(short_url):
     try:
-        return requests.head(short_url, allow_redirects=True, timeout=5).url
-    except:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        req = urllib.request.Request(short_url, headers=headers, method='HEAD')
+        
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.geturl()
+    except Exception:
         return short_url
 
 def download_gallery(url, save_dir):
