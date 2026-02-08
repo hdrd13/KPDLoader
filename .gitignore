@@ -1,6 +1,7 @@
 config.py
 *.session
 *.session-journal
+*.db
 downloads/
 __pycache__/
 logs/
