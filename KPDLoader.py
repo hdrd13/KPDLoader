@@ -3,17 +3,17 @@ import asyncio
 import logging
 import shutil
 import subprocess
-import urllib.request
 import html
 import sys
 import re
-import sqlite3
+import aiosqlite
+import aiohttp
 import time
 import json
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters, idle, enums
 from pyrogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton, 
-    InputMediaPhoto, BotCommand
+    InputMediaPhoto, BotCommand, ReplyParameters
 )
 import yt_dlp
 
@@ -64,9 +64,9 @@ app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 if not os.path.exists(DOWNLOAD_PATH):
     os.makedirs(DOWNLOAD_PATH)
 
-def init_db():
-    with sqlite3.connect(DB_NAME) as con:
-        con.execute("""
+async def init_db():
+    async with aiosqlite.connect(DB_NAME) as con:
+        await con.execute("""
             CREATE TABLE IF NOT EXISTS cache (
                 url TEXT PRIMARY KEY,
                 video_id TEXT,
@@ -75,37 +75,38 @@ def init_db():
                 timestamp REAL
             )
         """)
+        await con.commit()
 
-def get_cache(url):
-    with sqlite3.connect(DB_NAME) as con:
-        con.execute("DELETE FROM cache WHERE timestamp < ?", (time.time() - 259200,))
-        cur = con.execute("SELECT video_id, audio_id, caption FROM cache WHERE url = ?", (url,))
-        row = cur.fetchone()
-        return {'video': row[0], 'audio': row[1], 'caption': row[2]} if row else None
+async def get_cache(url):
+    async with aiosqlite.connect(DB_NAME) as con:
+        await con.execute("DELETE FROM cache WHERE timestamp < ?", (time.time() - 259200,))
+        await con.commit()
+        async with con.execute("SELECT video_id, audio_id, caption FROM cache WHERE url = ?", (url,)) as cur:
+            row = await cur.fetchone()
+            return {'video': row[0], 'audio': row[1], 'caption': row[2]} if row else None
 
-def update_cache(url, video_id=None, audio_id=None, caption=None):
-    with sqlite3.connect(DB_NAME) as con:
-        con.execute("INSERT OR IGNORE INTO cache (url, timestamp) VALUES (?, ?)", (url, time.time()))
+async def update_cache(url, video_id=None, audio_id=None, caption=None):
+    async with aiosqlite.connect(DB_NAME) as con:
+        await con.execute("INSERT OR IGNORE INTO cache (url, timestamp) VALUES (?, ?)", (url, time.time()))
         if video_id:
-            con.execute("UPDATE cache SET video_id = ?, timestamp = ? WHERE url = ?", (video_id, time.time(), url))
+            await con.execute("UPDATE cache SET video_id = ?, timestamp = ? WHERE url = ?", (video_id, time.time(), url))
         if audio_id:
-            con.execute("UPDATE cache SET audio_id = ?, timestamp = ? WHERE url = ?", (audio_id, time.time(), url))
+            await con.execute("UPDATE cache SET audio_id = ?, timestamp = ? WHERE url = ?", (audio_id, time.time(), url))
         if caption:
-            con.execute("UPDATE cache SET caption = ?, timestamp = ? WHERE url = ?", (caption, time.time(), url))
-init_db()
+            await con.execute("UPDATE cache SET caption = ?, timestamp = ? WHERE url = ?", (caption, time.time(), url))
+        await con.commit()
 
 def get_settings(user_id):
     if user_id not in user_settings:
         user_settings[user_id] = DEFAULT_SETTINGS.copy()
     return user_settings[user_id]
 
-def get_real_url(short_url):
+async def get_real_url(short_url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        req = urllib.request.Request(short_url, headers=headers, method='HEAD')
-        
-        with urllib.request.urlopen(req, timeout=5) as response:
-            return response.geturl()
+        async with aiohttp.ClientSession() as session:
+            async with session.head(short_url, headers=headers, allow_redirects=True, timeout=5) as response:
+                return str(response.url)
     except Exception:
         return short_url
 
@@ -122,13 +123,9 @@ def download_audio_force(url, save_dir):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': f'{save_dir}/audio.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'noplaylist': True,
-        'quiet': True,
+        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+        'noplaylist': True, 'quiet': True,
+        'concurrent_fragment_downloads': 5,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -142,8 +139,8 @@ def download_video(url, save_dir):
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': f'{save_dir}/video.%(ext)s',
-        'noplaylist': True,
-        'quiet': True,
+        'noplaylist': True, 'quiet': True,
+        'concurrent_fragment_downloads': 5,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -213,61 +210,42 @@ async def link_handler(client, message: Message):
     uid = message.from_user.id
     settings = get_settings(uid)
     
-    url_pattern = r"(https?://(?:www\.)?[\w.-]*(?:tiktok\.com|instagram\.com|youtube\.com/shorts/|music\.youtube\.com).*[/\?][^\s]+)"
-    match = re.search(url_pattern, message.text)
-    
-    if not match:
-        return
-        
+    match = re.search(r"(https?://(?:www\.)?[\w.-]*(?:tiktok\.com|instagram\.com|youtube\.com/shorts/|music\.youtube\.com).*[/\?][^\s]+)", message.text)
+    if not match: return
     raw_url = match.group(0)
     
     status = await message.reply("⏳ Downloading...")
-    
     unique_id = str(message.id)
     save_dir = os.path.join(DOWNLOAD_PATH, unique_id)
     if not os.path.exists(save_dir): os.makedirs(save_dir)
 
     try:
-        real_url = await asyncio.to_thread(get_real_url, raw_url)
-
+        real_url = await get_real_url(raw_url)
         is_simple_video = not ("/photo/" in real_url or "instagram.com/p/" in real_url or "music.youtube.com" in real_url)
-        
         default_buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 OG Link", url=real_url)]]) if settings['link_btn'] else None
 
         if is_simple_video:
-            cached_data = await asyncio.to_thread(get_cache, real_url)
-            
+            cached_data = await get_cache(real_url)
             if cached_data and cached_data['video']:
-                cached_caption = cached_data['caption'] if cached_data['caption'] else ""
-                
-                vid_cap = cached_caption if not settings['sep_desc'] else ""
-                vid_btn = default_buttons if not settings['sep_desc'] else None
-
                 try:
-                    await client.send_video(
-                        message.chat.id, 
-                        video=cached_data['video'], 
-                        caption=vid_cap, 
-                        reply_markup=vid_btn,
-                        reply_to_message_id=message.id
-                    )
+                    vid_cap = cached_data['caption'] if (cached_data['caption'] and not settings['sep_desc']) else ""
+                    vid_btn = default_buttons if not settings['sep_desc'] else None
+
+                    await client.send_video(message.chat.id, video=cached_data['video'], caption=vid_cap, reply_markup=vid_btn, reply_parameters=ReplyParameters(message_id=message.id), parse_mode=enums.ParseMode.HTML)
                     
-                    if settings['desc'] and settings['sep_desc'] and cached_caption:
-                        await message.reply(cached_caption, reply_markup=default_buttons)
+                    if settings['desc'] and settings['sep_desc'] and cached_data['caption']:
+                        await message.reply(cached_data['caption'], reply_markup=default_buttons)
 
                     if settings['audio']:
                         if cached_data['audio']:
-                            await client.send_audio(message.chat.id, cached_data['audio'], reply_to_message_id=message.id)
+                            await client.send_audio(message.chat.id, cached_data['audio'], reply_parameters=ReplyParameters(message_id=message.id))
                         else:
                             if not os.path.exists(save_dir): os.makedirs(save_dir)
                             await asyncio.to_thread(download_audio_force, real_url, save_dir)
-                            
                             audio_path = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
-                            
                             if audio_path:
-                                sent_audio = await client.send_audio(message.chat.id, audio_path, reply_to_message_id=message.id)
-                                if sent_audio.audio:
-                                    await asyncio.to_thread(update_cache, real_url, audio_id=sent_audio.audio.file_id)
+                                sent_audio = await client.send_audio(message.chat.id, audio_path, reply_parameters=ReplyParameters(message_id=message.id))
+                                if sent_audio.audio: await update_cache(real_url, audio_id=sent_audio.audio.file_id)
                     
                     await status.delete()
                     if os.path.exists(save_dir): shutil.rmtree(save_dir)
@@ -276,23 +254,14 @@ async def link_handler(client, message: Message):
                     logging.warning(f"Cache expired: {e}")
 
         info = await asyncio.to_thread(get_meta_info, real_url)
-        
-        caption = ""
+        caption, meta_title, meta_artist = "", "Original Audio", "Bot"
         buttons = default_buttons
-        meta_title = "Original Audio"
-        meta_artist = "Bot"
-        duration = 0
 
         if info:
             author = html.escape(info.get('uploader', 'User'))
             desc = html.escape(info.get('description', '') or info.get('title', ''))
             if len(desc) > 800: desc = desc[:800] + "..."
-            
-            if settings['desc']:
-                caption = f"<b>{author}</b>\n\n{desc}"
-                if settings['desc'] and not settings['link_btn']:
-                     caption += f"\n\n<a href='{real_url}'>Source Link</a>"
-
+            if settings['desc']: caption = f"<blockquote expandable><b>{author}</b>\n\n{desc}</blockquote>"
             meta_title = info.get('track') or info.get('title') or "Audio"
             meta_artist = info.get('artist') or info.get('uploader') or "Bot"
 
@@ -301,137 +270,67 @@ async def link_handler(client, message: Message):
 
         if is_photo:
             tasks = [asyncio.to_thread(download_gallery, real_url, save_dir)]
-            if settings['audio']:
-                tasks.append(asyncio.to_thread(download_audio_force, real_url, save_dir))
-            
+            if settings['audio']: tasks.append(asyncio.to_thread(download_audio_force, real_url, save_dir))
             await asyncio.gather(*tasks)
 
-            photos = []
-            audio_file = None
-            
-            for root, _, files in os.walk(save_dir):
-                for f in files:
-                    path = os.path.join(root, f)
-                    if f.lower().endswith(('.jpg', '.png', '.webp')):
-                        photos.append(path)
-                    elif f.lower().endswith(('.mp3', '.m4a')):
-                        audio_file = path
+            photos = sorted([os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.lower().endswith(('.jpg', '.png', '.webp'))])
+            audio_file = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.lower().endswith(('.mp3', '.m4a'))), None)
             
             if not photos:
                 await status.edit_text("❌ Nothing found.")
                 return
 
             await status.edit_text("🔄️ Uploading...")
-
-            photos.sort()
             
-            chunk_size = 10
-            first_caption = caption if (not settings['sep_desc']) else ""
-            
-            for i in range(0, len(photos), chunk_size):
-                chunk = photos[i:i + chunk_size]
-                media_group = []
-                for idx, p in enumerate(chunk):
-                    cap = first_caption if (i==0 and idx==0) else ""
-                    media_group.append(InputMediaPhoto(p, caption=cap))
-                
-                await client.send_media_group(message.chat.id, media=media_group, reply_to_message_id=message.id)
+            for i in range(0, len(photos), 10):
+                chunk = photos[i:i + 10]
+                media_group = [InputMediaPhoto(p, caption=(caption if i==0 and not settings['sep_desc'] else "")) for p in chunk]
+                await client.send_media_group(message.chat.id, media=media_group, reply_parameters=ReplyParameters(message_id=message.id), parse_mode=enums.ParseMode.HTML)
 
             if settings['desc'] and settings['sep_desc'] and caption:
-                btn_to_use = buttons if (not audio_file or not settings['audio']) else None
-                await message.reply(caption, reply_markup=btn_to_use)
-                if not audio_file: buttons = None
+                await message.reply(caption, reply_markup=buttons if (not audio_file or not settings['audio']) else None, parse_mode=enums.ParseMode.HTML)
 
             if audio_file and settings['audio']:
-                await client.send_audio(
-                    message.chat.id, 
-                    audio_file, 
-                    title=meta_title, 
-                    performer=meta_artist, 
-                    reply_markup=buttons, 
-                    reply_to_message_id=message.id
-                )
-                buttons = None
-
-            if buttons and settings['link_btn'] and not settings['sep_desc']:
+                await client.send_audio(message.chat.id, audio_file, title=meta_title, performer=meta_artist, reply_markup=None, reply_parameters=ReplyParameters(message_id=message.id))
+            elif buttons and settings['link_btn'] and not settings['sep_desc']:
                  await message.reply("🔗", reply_markup=buttons)
 
             await status.delete()
 
         elif is_yt_music:
             await status.edit_text("🎧 Downloading music...")
-            
-            success = await asyncio.to_thread(download_audio_force, real_url, save_dir)
-            
-            if success:
+            if await asyncio.to_thread(download_audio_force, real_url, save_dir):
                 await status.edit_text("🔄️ Uploading...")
-                audio_file = None
-                for root, _, files in os.walk(save_dir):
-                    for f in files:
-                        if f.lower().endswith(('.mp3', '.m4a')):
-                            audio_file = os.path.join(root, f)
-                            break
-                
+                audio_file = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
                 if audio_file:
-                    await client.send_audio(
-                        message.chat.id, 
-                        audio_file, 
-                        title=meta_title, 
-                        performer=meta_artist, 
-                        duration=duration,
-                        reply_markup=buttons,
-                        reply_to_message_id=message.id
-                    )
-                
+                    await client.send_audio(message.chat.id, audio_file, title=meta_title, performer=meta_artist, reply_markup=buttons, reply_parameters=ReplyParameters(message_id=message.id))
                 await status.delete()
             else:
                 await status.edit_text("❌ Audio download error.")
 
         else:
             tasks = [asyncio.to_thread(download_video, real_url, save_dir)]
-            if settings['audio']:
-                tasks.append(asyncio.to_thread(download_audio_force, real_url, save_dir))
+            if settings['audio']: tasks.append(asyncio.to_thread(download_audio_force, real_url, save_dir))
             
             results = await asyncio.gather(*tasks)
             vid_path = results[0][0]
             
             if vid_path and os.path.exists(vid_path):
                 await status.edit_text("🔄️ Uploading...")
-                
                 vid_cap = caption if not settings['sep_desc'] else ""
                 vid_btn = buttons if not settings['sep_desc'] else None
                 
-                sent_msg = await client.send_video(
-                    message.chat.id, 
-                    video=vid_path, 
-                    caption=vid_cap, 
-                    reply_markup=vid_btn,
-                    reply_to_message_id=message.id
-                )
-                if sent_msg.video:
-                    await asyncio.to_thread(update_cache, real_url, video_id=sent_msg.video.file_id, caption=caption)
-                
+                sent_msg = await client.send_video(message.chat.id, video=vid_path, caption=vid_cap, reply_markup=vid_btn, reply_parameters=ReplyParameters(message_id=message.id), parse_mode=enums.ParseMode.HTML)
+                if sent_msg.video: await update_cache(real_url, video_id=sent_msg.video.file_id, caption=caption)
+
                 if settings['audio']:
-                    audio_file = None
-                    for root, _, files in os.walk(save_dir):
-                        for f in files:
-                            if f.lower().endswith(('.mp3', '.m4a')):
-                                audio_file = os.path.join(root, f)
-                                break
-                    
+                    audio_file = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
                     if audio_file:
-                        sent_audio = await client.send_audio(
-                            message.chat.id, 
-                            audio_file, 
-                            title=meta_title, 
-                            performer=meta_artist, 
-                            reply_to_message_id=message.id
-                        )
-                    if sent_audio.audio:
-                        await asyncio.to_thread(update_cache, real_url, audio_id=sent_audio.audio.file_id)
+                        sent_audio = await client.send_audio(message.chat.id, audio_file, title=meta_title, performer=meta_artist, reply_parameters=ReplyParameters(message_id=message.id))
+                        if sent_audio.audio: await update_cache(real_url, audio_id=sent_audio.audio.file_id)
 
                 if settings['desc'] and settings['sep_desc'] and caption:
-                    await message.reply(caption, reply_markup=buttons)
+                    await message.reply(caption, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
 
                 await status.delete()
             else:
@@ -440,14 +339,12 @@ async def link_handler(client, message: Message):
     except Exception as e:
         await status.edit_text(f"Error: {e}")
         logging.error(e)
-    
     finally:
-        await asyncio.sleep(5)
-        if os.path.exists(save_dir):
-            try: shutil.rmtree(save_dir)
-            except: pass
+        await asyncio.sleep(2)
+        if os.path.exists(save_dir): shutil.rmtree(save_dir, ignore_errors=True)
 
 async def start_bot():
+    await init_db()
     print("🚀 Starting bot...")
     await app.start()
     
