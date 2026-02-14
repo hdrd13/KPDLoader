@@ -10,6 +10,8 @@ import aiosqlite
 import aiohttp
 import time
 import json
+import traceback
+import io
 from pyrogram import Client, filters, idle, enums
 from pyrogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton, 
@@ -57,7 +59,8 @@ def save_settings_to_file():
 
 user_settings = load_settings()
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(name)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -458,8 +461,30 @@ async def link_handler(client, message: Message):
                 await status.edit_text("❌ Video download error.")
 
     except Exception as e:
-        await status.edit_text(f"Error: {e}")
-        logging.error(f"Handler error: {e}", exc_info=True)
+        logger.error(f"Error processing {raw_url}: {e}")
+        error_text = str(e)
+        user_msg = (
+            "Uh-oh. Houston, we have a problem:\n"
+            f"<blockquote expandable>{html.escape(error_text)}</blockquote>"
+        )
+        try:
+            await status.edit_text(user_msg, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+        if hasattr(config, 'OWNER_ID'):
+            tb_text = traceback.format_exc()
+            doc = io.BytesIO(tb_text.encode('utf-8'))
+            doc.name = "error_log.txt"
+            try:
+                owner_report = (
+                    f"🚨 <b>Something happened...</b>\n"
+                    f"<blockquote expandable>{html.escape(error_text)}</blockquote>\n"
+                )
+                await client.send_document(config.OWNER_ID, document=doc, caption=owner_report, parse_mode=enums.ParseMode.HTML)
+            except Exception as admin_err:
+                logger.error(f"Failed to send log file: {admin_err}")
+            except Exception as owner_err:
+                logger.error(f"Failed to send log to owner: {owner_err}")
     finally:
         await asyncio.sleep(2)
         if os.path.exists(save_dir): shutil.rmtree(save_dir, ignore_errors=True)
