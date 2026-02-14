@@ -257,8 +257,8 @@ def get_meta_info(url):
 def get_settings_kb(user_id):
     s = get_settings(user_id)
     kb = [
-        [InlineKeyboardButton(f"🎵 Download audio: {'✅' if s['audio'] else '❌'}", callback_data="set_audio")],
-        [InlineKeyboardButton(f"📝 Add desc: {'✅' if s['desc'] else '❌'}", callback_data="set_desc")],
+        [InlineKeyboardButton(f"🎵 Add audio to photos: {'✅' if s['audio'] else '❌'}", callback_data="set_audio")],
+        [InlineKeyboardButton(f"📝 Add description: {'✅' if s['desc'] else '❌'}", callback_data="set_desc")],
     ]
     if s['desc']:
         kb.append([InlineKeyboardButton(f"📄 Desc. separately: {'✅' if s['sep_desc'] else '❌'}", callback_data="set_sep")])
@@ -399,17 +399,6 @@ async def link_handler(client, message: Message):
                     if settings['desc'] and settings['sep_desc'] and cached_data['caption']:
                         await message.reply(cached_data['caption'], reply_markup=default_buttons)
 
-                    if settings['audio']:
-                        if cached_data['audio']:
-                            await client.send_audio(message.chat.id, cached_data['audio'], reply_parameters=ReplyParameters(message_id=message.id))
-                        else:
-                            if not os.path.exists(save_dir): os.makedirs(save_dir)
-                            await asyncio.to_thread(download_audio_force, real_url, save_dir)
-                            audio_path = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
-                            if audio_path:
-                                sent_audio = await client.send_audio(message.chat.id, audio_path, reply_parameters=ReplyParameters(message_id=message.id))
-                                if sent_audio.audio: await update_cache(real_url, audio_id=sent_audio.audio.file_id)
-                    
                     await status.delete()
                     if os.path.exists(save_dir): shutil.rmtree(save_dir)
                     return
@@ -417,24 +406,22 @@ async def link_handler(client, message: Message):
                     logging.warning(f"Cache expired: {e}")
 
         info = await asyncio.to_thread(get_meta_info, real_url)
-        caption, meta_title, meta_artist = "", "Original Audio", "Bot"
+        caption = ""
 
         if info:
             author = html.escape(info.get('uploader', 'User'))
             desc = html.escape(info.get('description', '') or info.get('title', ''))
             if len(desc) > 800: desc = desc[:800] + "..."
             if settings['desc']: caption = f"<blockquote expandable><b>{author}</b>\n\n{desc}</blockquote>"
-            meta_title = info.get('track') or info.get('title') or "Audio"
-            meta_artist = info.get('artist') or info.get('uploader') or "Bot"
 
         if is_yt_music:
-            await status.edit_text("🎧 Downloading music...")
+            meta_title = info.get('track') or info.get('title') or "Audio"
+            meta_artist = info.get('artist') or info.get('uploader') or "Bot"
             if await asyncio.to_thread(download_audio_force, real_url, save_dir):
                 await status.edit_text("🔄️ Uploading...")
                 audio_file = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
                 if audio_file:
                     sent_audio = await client.send_audio(message.chat.id, audio_file, title=meta_title, performer=meta_artist, reply_markup=default_buttons, reply_parameters=ReplyParameters(message_id=message.id))
-                    if sent_audio.audio: await update_cache(real_url, audio_id=sent_audio.audio.file_id)
                 await status.delete()
             else:
                 await status.edit_text("❌ Audio download error.")
@@ -462,19 +449,6 @@ async def link_handler(client, message: Message):
                 
                 if sent_msg.video: 
                     await update_cache(real_url, video_id=sent_msg.video.file_id, caption=caption)
-
-                if settings['audio']:
-                    audio_file = next((os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.endswith(('.mp3', '.m4a'))), None)
-                    if audio_file:
-                        sent_audio = await client.send_audio(
-                            message.chat.id, 
-                            audio_file, 
-                            title=meta_title, 
-                            performer=meta_artist, 
-                            reply_parameters=ReplyParameters(message_id=message.id)
-                        )
-                        if sent_audio.audio: 
-                            await update_cache(real_url, audio_id=sent_audio.audio.file_id)
 
                 if settings['desc'] and settings['sep_desc'] and caption:
                     await message.reply(caption, reply_markup=default_buttons, parse_mode=enums.ParseMode.HTML)
