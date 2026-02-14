@@ -2,7 +2,6 @@ import os
 import asyncio
 import logging
 import shutil
-import subprocess
 import html
 import sys
 import re
