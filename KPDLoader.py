@@ -228,6 +228,11 @@ def download_audio_force(url, save_dir):
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
         'noplaylist': True, 'quiet': True,
         'concurrent_fragment_downloads': 5,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android_vr']
+            }
+        }    
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -243,13 +248,18 @@ def download_video(url, save_dir):
         'outtmpl': f'{save_dir}/video.%(ext)s',
         'noplaylist': True, 'quiet': True,
         'concurrent_fragment_downloads': 5,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android_vr']
+            }
+        }
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         return ydl.prepare_filename(info), info
 
 def get_meta_info(url):
-    ydl_opts = {'quiet': True, 'noplaylist': True}
+    ydl_opts = {'quiet': True, 'noplaylist': True, 'extractor_args': {'youtube': {'player_client': ['android_vr']}}}
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             return ydl.extract_info(url, download=False)
