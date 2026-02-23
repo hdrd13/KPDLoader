@@ -19,5 +19,8 @@ Then you need to rename <code>config.py.sample</code> to <code>config.py</code> 
 </ul>
 Optional: add your account ID to OWNER_ID line if you want to receive error logs
 
+> [!WARNING]
+> For correct YT Shorts/Music downloading you may need to <a href="https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp">get cookies</a>
+
 ### And, finally, run it
 <pre><code>python KPDLoader.py</code></pre>

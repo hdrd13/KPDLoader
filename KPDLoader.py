@@ -132,7 +132,11 @@ async def get_real_url(short_url):
         pass
 
     def resolve_via_ytdlp():
-        ydl_opts = {'quiet': True, 'extract_flat': True}
+        ydl_opts = {
+            'quiet': True, 
+            'extract_flat': True,
+            'cookiefile': 'youtube_cookies.txt'
+        }
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(short_url, download=False)
@@ -239,6 +243,7 @@ def download_audio_force(url, save_dir):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': f'{save_dir}/audio.%(ext)s',
+        'cookiefile': 'youtube_cookies.txt',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
         'noplaylist': True, 'quiet': True,
         'concurrent_fragment_downloads': 5,
@@ -255,6 +260,7 @@ def download_video(url, save_dir):
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': f'{save_dir}/video.%(ext)s',
+        'cookiefile': 'youtube_cookies.txt',
         'noplaylist': True, 'quiet': True,
         'concurrent_fragment_downloads': 5,
     }

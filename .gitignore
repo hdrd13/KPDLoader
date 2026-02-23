@@ -6,3 +6,4 @@ downloads/
 __pycache__/
 logs/
 user_settings.json
+youtube_cookies.txt
