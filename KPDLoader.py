@@ -289,7 +289,7 @@ async def settings_handler(client, message):
 
 @app.on_callback_query(filters.regex("^set_"))
 async def callback_handler(client, callback):
-    chat_id = callback.from_chat.id
+    chat_id = callback.message.chat.id
     action = callback.data.split("_")[1]
     s = get_settings(chat_id)
     
