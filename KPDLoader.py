@@ -285,13 +285,13 @@ def get_settings_kb(user_id):
 
 @app.on_message(filters.command("settings"))
 async def settings_handler(client, message):
-    await message.reply("⚙️ <b>Download settings:</b>", reply_markup=get_settings_kb(message.from_user.id))
+    await message.reply("⚙️ <b>Download settings:</b>", reply_markup=get_settings_kb(message.chat.id))
 
 @app.on_callback_query(filters.regex("^set_"))
 async def callback_handler(client, callback):
-    uid = callback.from_user.id
+    chat_id = callback.from_chat.id
     action = callback.data.split("_")[1]
-    s = get_settings(uid)
+    s = get_settings(chat_id)
     
     if action == "close":
         try:
@@ -306,7 +306,7 @@ async def callback_handler(client, callback):
 
     save_settings_to_file()
     
-    await callback.message.edit_reply_markup(get_settings_kb(uid))
+    await callback.message.edit_reply_markup(get_settings_kb(chat_id))
 
 @app.on_message(filters.command("start"))
 async def start_handler(client, message):
@@ -323,8 +323,8 @@ async def start_handler(client, message):
 
 @app.on_message(filters.regex(r"(tiktok\.com|instagram\.com|youtube\.com/shorts/|music\.youtube\.com)"))
 async def link_handler(client, message: Message):
-    uid = message.from_user.id
-    settings = get_settings(uid)
+    chat_id = message.chat.id
+    settings = get_settings(chat_id)
     
     match = re.search(r"(https?://(?:www\.)?[\w.-]*(?:tiktok\.com|instagram\.com|youtube\.com/shorts/|music\.youtube\.com).*[/\?][^\s]+)", message.text)
     if not match: return
@@ -377,6 +377,8 @@ async def link_handler(client, message: Message):
 
         if is_tiktok:
             success, caption, meta_title, meta_artist = await download_gallery(real_url, save_dir)
+            if not settings['desc']:
+                caption = ""
             if success:
                 await status.edit_text("🔄️ Uploading...")
                 photos = sorted([os.path.join(r, f) for r, _, fs in os.walk(save_dir) for f in fs if f.lower().endswith(('.jpg', '.png', '.webp'))])
