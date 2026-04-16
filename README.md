@@ -1,6 +1,6 @@
 # KPDLoader
 
-Simple (vibecoded 🫩) Telegram bot for downloading content from TikTok, YouTube Shorts, Instagram (Reels only) and YT Music (only music.youtube.com links are supported) 
+Simple (vibecoded 🫩) Telegram bot for downloading content from TikTok
 
 ## Requirements 
 <ul>
